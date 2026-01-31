@@ -87,7 +87,10 @@ class OllamaEmbeddingConfig(BaseEmbedderConfig):
     model: Optional[str] = Field(default=None)
     ollama_base_url: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("OLLAMA_EMBEDDING_BASE_URL"),
+        validation_alias=AliasChoices(
+            "OLLAMA_EMBEDDING_BASE_URL",
+            "OLLAMA_BASE_URL",
+        ),
     )
 
 
