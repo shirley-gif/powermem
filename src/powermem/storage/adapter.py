@@ -287,6 +287,12 @@ class StorageAdapter:
             if not isinstance(metadata_contains, dict):
                 raise ValueError("Filter 'metadata_contains' must be an object of key-value pairs.")
             for key, value in metadata_contains.items():
+                if key == "category":
+                    if isinstance(value, list):
+                        add_condition({"category": {"in": value}})
+                    else:
+                        add_condition({"category": value})
+                    continue
                 if isinstance(value, list):
                     add_condition({f"metadata.{key}": {"contains_any": value}})
                 else:
