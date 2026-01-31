@@ -61,6 +61,31 @@ class StorageAdapter:
         # Create vector from content using embedding service
         content = memory_data.get("content", "")
         metadata = memory_data.get("metadata", {})
+        intelligence = metadata.get("intelligence", {}) if isinstance(metadata, dict) else {}
+
+        importance_score = memory_data.get("importance_score")
+        if importance_score is None and isinstance(metadata, dict):
+            importance_score = metadata.get("importance_score")
+        if importance_score is None and isinstance(intelligence, dict):
+            importance_score = intelligence.get("importance_score")
+
+        retention_score = memory_data.get("retention_score")
+        if retention_score is None and isinstance(metadata, dict):
+            retention_score = metadata.get("retention_score")
+        if retention_score is None and isinstance(intelligence, dict):
+            retention_score = intelligence.get("current_retention", intelligence.get("retention_score"))
+
+        memory_type = memory_data.get("memory_type")
+        if memory_type is None and isinstance(metadata, dict):
+            memory_type = metadata.get("memory_type")
+
+        scope = memory_data.get("scope")
+        if scope is None and isinstance(metadata, dict):
+            scope = metadata.get("scope")
+
+        tags = memory_data.get("tags")
+        if tags is None and isinstance(metadata, dict):
+            tags = metadata.get("tags")
 
         # Route to target store (main or sub store)
         target_store = self._route_to_store(metadata)
@@ -103,6 +128,11 @@ class StorageAdapter:
             "updated_at": serialize_datetime(memory_data.get("updated_at", "")),
             "category": memory_data.get("category", ""),
             "fulltext_content": content,  # For full-text search
+            "importance_score": importance_score,
+            "retention_score": retention_score,
+            "memory_type": memory_type,
+            "scope": scope,
+            "tags": tags,
         }
         
         # Add sparse embedding to payload if available
@@ -126,6 +156,166 @@ class StorageAdapter:
             raise ValueError("Failed to insert memory: no ID returned from vector store")
         memory_id = generated_ids[0]  # Get the first (and only) generated Snowflake ID
         return memory_id
+
+    def _normalize_search_filters(
+        self,
+        filters: Optional[Dict[str, Any]],
+        target_store: VectorStoreBase,
+    ) -> Optional[Dict[str, Any]]:
+        if not filters:
+            return None
+
+        if hasattr(filters, "model_dump"):
+            filters = filters.model_dump(exclude_none=True)
+
+        if not isinstance(filters, dict):
+            raise ValueError("Search filters must be a dictionary of filter options.")
+
+        filters = serialize_datetime(filters)
+        filters = filters.copy()
+
+        from powermem.storage.sqlite.sqlite_vector_store import SQLiteVectorStore
+
+        is_sqlite = isinstance(target_store, SQLiteVectorStore)
+        advanced_keys = {
+            "created_after",
+            "created_before",
+            "updated_after",
+            "updated_before",
+            "min_importance",
+            "max_importance",
+            "min_retention",
+            "max_retention",
+            "memory_types",
+            "tags",
+            "tag_logic",
+            "user_ids",
+            "agent_ids",
+            "scopes",
+            "metadata_contains",
+            "metadata_equals",
+        }
+
+        base_logic = {}
+        if "AND" in filters or "OR" in filters:
+            if "AND" in filters:
+                base_logic["AND"] = filters.pop("AND")
+            if "OR" in filters:
+                base_logic["OR"] = filters.pop("OR")
+
+        conditions: List[Dict[str, Any]] = []
+
+        def add_condition(condition: Dict[str, Any]) -> None:
+            if condition:
+                conditions.append(condition)
+
+        def require_list(name: str, value: Any) -> List[Any]:
+            if not isinstance(value, list) or not value:
+                raise ValueError(f"Filter '{name}' must be a non-empty list.")
+            return value
+
+        def require_number(name: str, value: Any) -> float:
+            if not isinstance(value, (int, float)):
+                raise ValueError(f"Filter '{name}' must be a number.")
+            return float(value)
+
+        created_after = filters.pop("created_after", None)
+        if created_after is not None:
+            add_condition({"created_at": {"gte": created_after}})
+
+        created_before = filters.pop("created_before", None)
+        if created_before is not None:
+            add_condition({"created_at": {"lte": created_before}})
+
+        updated_after = filters.pop("updated_after", None)
+        if updated_after is not None:
+            add_condition({"updated_at": {"gte": updated_after}})
+
+        updated_before = filters.pop("updated_before", None)
+        if updated_before is not None:
+            add_condition({"updated_at": {"lte": updated_before}})
+
+        min_importance = filters.pop("min_importance", None)
+        if min_importance is not None:
+            add_condition({"importance_score": {"gte": require_number("min_importance", min_importance)}})
+
+        max_importance = filters.pop("max_importance", None)
+        if max_importance is not None:
+            add_condition({"importance_score": {"lte": require_number("max_importance", max_importance)}})
+
+        min_retention = filters.pop("min_retention", None)
+        if min_retention is not None:
+            add_condition({"retention_score": {"gte": require_number("min_retention", min_retention)}})
+
+        max_retention = filters.pop("max_retention", None)
+        if max_retention is not None:
+            add_condition({"retention_score": {"lte": require_number("max_retention", max_retention)}})
+
+        memory_types = filters.pop("memory_types", None)
+        if memory_types is not None:
+            add_condition({"memory_type": {"in": require_list("memory_types", memory_types)}})
+
+        user_ids = filters.pop("user_ids", None)
+        if user_ids is not None:
+            add_condition({"user_id": {"in": require_list("user_ids", user_ids)}})
+
+        agent_ids = filters.pop("agent_ids", None)
+        if agent_ids is not None:
+            add_condition({"agent_id": {"in": require_list("agent_ids", agent_ids)}})
+
+        scopes = filters.pop("scopes", None)
+        if scopes is not None:
+            add_condition({"scope": {"in": require_list("scopes", scopes)}})
+
+        tags = filters.pop("tags", None)
+        tag_logic = filters.pop("tag_logic", "OR")
+        if tags is not None:
+            tags_list = require_list("tags", tags)
+            if tag_logic not in {"AND", "OR"}:
+                raise ValueError("Filter 'tag_logic' must be either 'AND' or 'OR'.")
+            if is_sqlite:
+                op = "contains_all" if tag_logic == "AND" else "contains_any"
+                add_condition({"tags": {op: tags_list}})
+            else:
+                tag_conditions = []
+                for tag in tags_list:
+                    tag_conditions.append({"tags": {"like": f"%\"{tag}\"%"}})
+                add_condition({tag_logic: tag_conditions})
+
+        metadata_contains = filters.pop("metadata_contains", None)
+        if metadata_contains is not None:
+            if not isinstance(metadata_contains, dict):
+                raise ValueError("Filter 'metadata_contains' must be an object of key-value pairs.")
+            for key, value in metadata_contains.items():
+                if isinstance(value, list):
+                    add_condition({f"metadata.{key}": {"contains_any": value}})
+                else:
+                    add_condition({f"metadata.{key}": {"contains": value}})
+
+        metadata_equals = filters.pop("metadata_equals", None)
+        if metadata_equals is not None:
+            if not isinstance(metadata_equals, dict):
+                raise ValueError("Filter 'metadata_equals' must be an object of key-value pairs.")
+            for key, value in metadata_equals.items():
+                add_condition({f"metadata.{key}": value})
+
+        for key, value in filters.items():
+            if key in advanced_keys:
+                continue
+            add_condition({key: value})
+
+        if base_logic:
+            if conditions:
+                return {"AND": [base_logic, *conditions]}
+            return base_logic
+
+        if not conditions:
+            return None
+
+        if len(conditions) == 1:
+            return conditions[0]
+
+        return {"AND": conditions}
     
     def search_memories(
         self,
@@ -162,6 +352,9 @@ class StorageAdapter:
         # Route to target store (main or sub store)
         target_store = self._route_to_store(effective_filters)
 
+        # Normalize advanced filters for the target store
+        normalized_filters = self._normalize_search_filters(effective_filters, target_store)
+
         # Unified search method - try OceanBase format first, fallback to SQLite
         # Pass query text to enable hybrid search (vector + full-text search)
         try:
@@ -171,13 +364,13 @@ class StorageAdapter:
             import inspect
             search_sig = inspect.signature(target_store.search)
             if 'sparse_embedding' in search_sig.parameters:
-                results = target_store.search(search_query, vectors=query_vector, limit=limit, filters=effective_filters, sparse_embedding=sparse_embedding)
+                results = target_store.search(search_query, vectors=query_vector, limit=limit, filters=normalized_filters, sparse_embedding=sparse_embedding)
             else:
-                results = target_store.search(search_query, vectors=query_vector, limit=limit, filters=effective_filters)
+                results = target_store.search(search_query, vectors=query_vector, limit=limit, filters=normalized_filters)
         except TypeError:
             # Fallback to SQLite format (doesn't support query text parameter)
             # Pass filters to ensure filtering works correctly
-            results = target_store.search(search_query if query else "", vectors=[query_vector], limit=limit, filters=effective_filters)
+            results = target_store.search(search_query if query else "", vectors=[query_vector], limit=limit, filters=normalized_filters)
         
         # Convert results to unified format
         memories = []

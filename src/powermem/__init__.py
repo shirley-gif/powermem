@@ -15,6 +15,7 @@ from .core.memory import Memory, _auto_convert_config
 from .core.async_memory import AsyncMemory
 from .core.base import MemoryBase
 from .user_memory import UserMemory
+from .search import FilterBuilder
 
 # Import configuration loader
 from .config_loader import load_config_from_env, create_config, validate_config, auto_config

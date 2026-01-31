@@ -95,6 +95,33 @@ memory.add("User likes coffee", user_id="user123")
 results = memory.search("user preferences", user_id="user123")
 for result in results.get('results', []):
     print(f"- {result.get('memory')}")
+
+# Advanced filters
+results = memory.search(
+    "work updates",
+    filters={
+        "created_after": "2024-01-01",
+        "min_importance": 0.7,
+        "tags": ["work", "urgent"],
+        "tag_logic": "AND",
+        "memory_types": ["long_term"],
+        "metadata_contains": {"category": "shopping"},
+    },
+    user_id="user123",
+)
+
+# Fluent filter builder
+from powermem import FilterBuilder
+
+filters = (
+    FilterBuilder()
+    .after("2024-01-01")
+    .importance(minimum=0.7)
+    .tags(["work"], logic="AND")
+    .metadata_contains({"category": "shopping"})
+    .build()
+)
+results = memory.search("work updates", filters=filters, user_id="user123")
 ```
 
 For more detailed examples and usage patterns, see the [Getting Started Guide](docs/guides/0001-getting_started.md).
