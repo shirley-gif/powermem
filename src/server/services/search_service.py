@@ -61,12 +61,18 @@ class SearchService:
                     status_code=400,
                 )
             
+            filters_payload = (
+                filters.model_dump(exclude_none=True)
+                if hasattr(filters, "model_dump")
+                else filters
+            )
+
             results = self.memory.search(
                 query=query,
                 user_id=user_id,
                 agent_id=agent_id,
                 run_id=run_id,
-                filters=filters,
+                filters=filters_payload,
                 limit=limit,
             )
             
@@ -78,6 +84,14 @@ class SearchService:
             
             return results
             
+        except ValueError as e:
+            metrics_collector = get_metrics_collector()
+            metrics_collector.record_memory_operation("search", "failed")
+            raise APIError(
+                code=ErrorCode.INVALID_SEARCH_PARAMS,
+                message=str(e),
+                status_code=400,
+            )
         except APIError:
             # Record failed memory operation for API errors
             metrics_collector = get_metrics_collector()

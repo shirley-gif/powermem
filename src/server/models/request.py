@@ -2,7 +2,8 @@
 Request models for PowerMem API
 """
 
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Literal
 from pydantic import BaseModel, Field
 
 
@@ -63,6 +64,27 @@ class MemoryBatchUpdateRequest(BaseModel):
     agent_id: Optional[str] = Field(None, description="Agent ID for access control")
 
 
+class SearchFilters(BaseModel):
+    """Advanced filter options for memory search"""
+
+    created_after: Optional[datetime] = Field(None, description="Only include memories created after this datetime")
+    created_before: Optional[datetime] = Field(None, description="Only include memories created before this datetime")
+    updated_after: Optional[datetime] = Field(None, description="Only include memories updated after this datetime")
+    updated_before: Optional[datetime] = Field(None, description="Only include memories updated before this datetime")
+    min_importance: Optional[float] = Field(None, description="Minimum importance score (0-1)")
+    max_importance: Optional[float] = Field(None, description="Maximum importance score (0-1)")
+    min_retention: Optional[float] = Field(None, description="Minimum retention score (0-1)")
+    max_retention: Optional[float] = Field(None, description="Maximum retention score (0-1)")
+    memory_types: Optional[List[str]] = Field(None, description="Filter by memory types")
+    tags: Optional[List[str]] = Field(None, description="Filter by tags")
+    tag_logic: Optional[Literal["AND", "OR"]] = Field("OR", description="Tag matching logic")
+    user_ids: Optional[List[str]] = Field(None, description="Filter by user IDs")
+    agent_ids: Optional[List[str]] = Field(None, description="Filter by agent IDs")
+    scopes: Optional[List[str]] = Field(None, description="Filter by memory scopes")
+    metadata_contains: Optional[Dict[str, Any]] = Field(None, description="Metadata contains key-value pairs")
+    metadata_equals: Optional[Dict[str, Any]] = Field(None, description="Metadata equals key-value pairs")
+
+
 class SearchRequest(BaseModel):
     """Request model for searching memories"""
     
@@ -70,7 +92,7 @@ class SearchRequest(BaseModel):
     user_id: Optional[str] = Field(None, description="Filter by user ID")
     agent_id: Optional[str] = Field(None, description="Filter by agent ID")
     run_id: Optional[str] = Field(None, description="Filter by run ID")
-    filters: Optional[Dict[str, Any]] = Field(None, description="Additional filters")
+    filters: Optional[SearchFilters] = Field(None, description="Additional filters")
     limit: int = Field(default=30, ge=1, le=100, description="Maximum number of results")
 
 

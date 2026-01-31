@@ -120,14 +120,10 @@ class SQLiteVectorStore(VectorStoreBase):
         
         # Apply filters if provided
         if filters:
-            conditions = []
-            for key, value in filters.items():
-                # Filter by JSON field in payload
-                conditions.append(f"json_extract(payload, '$.{key}') = ?")
-                query_params.append(value)
-            
-            if conditions:
-                query_sql += " WHERE " + " AND ".join(conditions)
+            where_clause, params = self._build_where_clause(filters)
+            if where_clause:
+                query_sql += f" WHERE {where_clause}"
+                query_params.extend(params)
                 logger.info(f"SQLite search with filters: {query_sql}, params: {query_params}")
             else:
                 logger.debug("SQLite search: filters provided but empty after processing")
@@ -159,6 +155,141 @@ class SQLiteVectorStore(VectorStoreBase):
         # Sort by similarity (descending) and return top results
         results.sort(key=lambda x: x.score, reverse=True)
         return results[:limit]
+
+    def _build_where_clause(self, filters: Dict[str, Any]) -> tuple[Optional[str], List[Any]]:
+        def get_json_extract(field: str) -> str:
+            if field.startswith("metadata."):
+                path = f"$.metadata.{field.split('.', 1)[1]}"
+            else:
+                path = f"$.{field}"
+            return f"json_extract(payload, '{path}')"
+
+        def build_condition(key: str, value: Any) -> tuple[Optional[str], List[Any]]:
+            column_expr = get_json_extract(key)
+
+            if isinstance(value, dict):
+                parts: List[str] = []
+                params: List[Any] = []
+                for op, op_value in value.items():
+                    if op in {"eq"}:
+                        parts.append(f"{column_expr} = ?")
+                        params.append(op_value)
+                    elif op in {"ne"}:
+                        parts.append(f"{column_expr} != ?")
+                        params.append(op_value)
+                    elif op in {"gt", "gte", "lt", "lte"}:
+                        comparator = {
+                            "gt": ">",
+                            "gte": ">=",
+                            "lt": "<",
+                            "lte": "<=",
+                        }[op]
+                        expr = (
+                            f"CAST({column_expr} AS REAL)"
+                            if isinstance(op_value, (int, float))
+                            else column_expr
+                        )
+                        parts.append(f"{expr} {comparator} ?")
+                        params.append(op_value)
+                    elif op == "in":
+                        if not isinstance(op_value, list) or not op_value:
+                            raise ValueError("Filter operator 'in' requires a non-empty list.")
+                        placeholders = ", ".join(["?"] * len(op_value))
+                        parts.append(f"{column_expr} IN ({placeholders})")
+                        params.extend(op_value)
+                    elif op == "nin":
+                        if not isinstance(op_value, list) or not op_value:
+                            raise ValueError("Filter operator 'nin' requires a non-empty list.")
+                        placeholders = ", ".join(["?"] * len(op_value))
+                        parts.append(f"{column_expr} NOT IN ({placeholders})")
+                        params.extend(op_value)
+                    elif op == "like":
+                        parts.append(f"{column_expr} LIKE ?")
+                        params.append(op_value)
+                    elif op == "ilike":
+                        parts.append(f"LOWER({column_expr}) LIKE LOWER(?)")
+                        params.append(op_value)
+                    elif op in {"contains", "contains_any", "contains_all"}:
+                        values = op_value if isinstance(op_value, list) else [op_value]
+                        if not values:
+                            raise ValueError("Filter operator 'contains' requires a value.")
+                        if op == "contains_all":
+                            sub_parts = []
+                            for single_value in values:
+                                sub_parts.append(
+                                    f"EXISTS (SELECT 1 FROM json_each({column_expr}) WHERE value = ?)"
+                                )
+                                params.append(single_value)
+                            parts.append("(" + " AND ".join(sub_parts) + ")")
+                        else:
+                            placeholders = ", ".join(["?"] * len(values))
+                            parts.append(
+                                f"EXISTS (SELECT 1 FROM json_each({column_expr}) WHERE value IN ({placeholders}))"
+                            )
+                            params.extend(values)
+                    else:
+                        raise ValueError(f"Unsupported filter operator: {op}")
+
+                if not parts:
+                    return None, []
+                return "(" + " AND ".join(parts) + ")", params
+
+            if value is None:
+                return f"{column_expr} IS NULL", []
+
+            return f"{column_expr} = ?", [value]
+
+        def process_condition(cond: Any) -> tuple[Optional[str], List[Any]]:
+            if isinstance(cond, dict):
+                if "AND" in cond:
+                    clauses = []
+                    params: List[Any] = []
+                    for item in cond["AND"]:
+                        clause, clause_params = process_condition(item)
+                        if clause:
+                            clauses.append(clause)
+                            params.extend(clause_params)
+                    if not clauses:
+                        return None, []
+                    return "(" + " AND ".join(clauses) + ")", params
+                if "OR" in cond:
+                    clauses = []
+                    params = []
+                    for item in cond["OR"]:
+                        clause, clause_params = process_condition(item)
+                        if clause:
+                            clauses.append(clause)
+                            params.extend(clause_params)
+                    if not clauses:
+                        return None, []
+                    return "(" + " OR ".join(clauses) + ")", params
+
+                clauses = []
+                params: List[Any] = []
+                for key, value in cond.items():
+                    clause, clause_params = build_condition(key, value)
+                    if clause:
+                        clauses.append(clause)
+                        params.extend(clause_params)
+                if not clauses:
+                    return None, []
+                return "(" + " AND ".join(clauses) + ")", params
+
+            if isinstance(cond, list):
+                clauses = []
+                params: List[Any] = []
+                for item in cond:
+                    clause, clause_params = process_condition(item)
+                    if clause:
+                        clauses.append(clause)
+                        params.extend(clause_params)
+                if not clauses:
+                    return None, []
+                return "(" + " AND ".join(clauses) + ")", params
+
+            return None, []
+
+        return process_condition(filters)
     
     def delete(self, vector_id: int) -> None:
         """Delete a vector by ID."""

@@ -553,6 +553,8 @@ class AsyncMemory(MemoryBase):
             "category": category,
             "metadata": enhanced_metadata or {},
             "filters": filters or {},
+            "scope": scope,
+            "memory_type": memory_type,
             "created_at": get_current_datetime(),
             "updated_at": get_current_datetime(),
         }
@@ -734,7 +736,9 @@ class AsyncMemory(MemoryBase):
                         run_id=run_id,
                         metadata=metadata,
                         filters=filters,
-                        existing_embeddings=fact_embeddings
+                        existing_embeddings=fact_embeddings,
+                        scope=scope,
+                        memory_type=memory_type,
                     )
                     results.append({
                         "id": memory_id,
@@ -870,6 +874,8 @@ class AsyncMemory(MemoryBase):
         metadata: Optional[Dict[str, Any]] = None,
         filters: Optional[Dict[str, Any]] = None,
         existing_embeddings: Optional[Dict[str, Any]] = None,
+        scope: Optional[str] = None,
+        memory_type: Optional[str] = None,
     ) -> int:
         """Create a memory asynchronously with optional embeddings."""
         # Validate content is not empty
@@ -913,6 +919,8 @@ class AsyncMemory(MemoryBase):
             "category": category,
             "metadata": enhanced_metadata or {},
             "filters": filters or {},
+            "scope": scope,
+            "memory_type": memory_type,
             "created_at": get_current_datetime(),
             "updated_at": get_current_datetime(),
         }
