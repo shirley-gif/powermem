@@ -396,10 +396,6 @@ class EmbeddingSettings(_BasePowermemSettings):
         default=None,
         validation_alias=AliasChoices("EMBEDDING_DIMS", "DIMS"),
     )
-    ollama_base_url: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("OLLAMA_EMBEDDING_BASE_URL", "OLLAMA_BASE_URL"),
-    )
 
     def to_config(self) -> Dict[str, Any]:
         embedding_provider = self.provider.lower()
@@ -409,7 +405,7 @@ class EmbeddingSettings(_BasePowermemSettings):
         )
         provider_settings = config_cls()
         overrides = {}
-        for field in ("api_key", "model", "embedding_dims", "ollama_base_url"):
+        for field in ("api_key", "model", "embedding_dims"):
             if field in self.model_fields_set:
                 value = getattr(self, field)
                 if value is not None:
